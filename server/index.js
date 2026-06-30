@@ -29,6 +29,30 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', port: Number(process.env.PORT) || port });
 });
 
+const extractYouTubeId = (url) => {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+
+    if (host.includes('youtu.be')) {
+      return parsed.pathname.slice(1);
+    }
+
+    if (parsed.searchParams.has('v')) {
+      return parsed.searchParams.get('v');
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const normalizeYouTubeUrl = (url) => {
+  const videoId = extractYouTubeId(url);
+  return videoId ? `https://www.youtube.com/watch?v=${videoId}` : url;
+};
+
 const isValidYouTubeUrl = (url) => {
   try {
     const parsed = new URL(url);
@@ -57,11 +81,16 @@ app.post('/api/metadata', async (req, res) => {
   }
 
   try {
-    const info = await ytdl.getBasicInfo(url, {
+    const normalizedUrl = normalizeYouTubeUrl(url);
+    console.log('[metadata] normalized URL', { normalizedUrl });
+
+    const info = await ytdl.getBasicInfo(normalizedUrl, {
       requestOptions: {
         headers: {
           'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9'
         }
       }
     });
