@@ -1,0 +1,8 @@
+node_modules
+**/node_modules
+dist
+client/dist
+server/public
+.DS_Store
+npm-debug.log*
+yarn-error.log*

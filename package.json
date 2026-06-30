@@ -1,0 +1,9 @@
+{
+  "name": "trimmer-yt",
+  "private": true,
+  "scripts": {
+    "start": "npm --prefix server start",
+    "build": "npm install --prefix client && npm install --prefix server && npm --prefix client run build",
+    "postinstall": "npm install --prefix client && npm install --prefix server && npm --prefix client run build"
+  }
+}
