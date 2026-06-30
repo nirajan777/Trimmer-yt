@@ -18,6 +18,13 @@ app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api')) {
+    console.log(`[api] ${req.method} ${req.path}`, req.body && Object.keys(req.body).length ? req.body : 'no body');
+  }
+  next();
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', port: Number(process.env.PORT) || port });
 });
@@ -25,7 +32,16 @@ app.get('/api/health', (req, res) => {
 const isValidYouTubeUrl = (url) => {
   try {
     const parsed = new URL(url);
-    return /^(www\.)?(youtube\.com|youtu\.be)$/.test(parsed.hostname);
+    const host = parsed.hostname.toLowerCase();
+    return [
+      'youtube.com',
+      'youtu.be',
+      'm.youtube.com',
+      'music.youtube.com',
+      'www.youtube.com',
+      'www.youtu.be',
+      'youtube-nocookie.com'
+    ].some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
   } catch {
     return false;
   }
@@ -33,16 +49,27 @@ const isValidYouTubeUrl = (url) => {
 
 app.post('/api/metadata', async (req, res) => {
   const { url } = req.body;
+  console.log('[metadata] request received', { url });
+
   if (!url || typeof url !== 'string' || !isValidYouTubeUrl(url)) {
+    console.warn('[metadata] invalid URL', { url });
     return res.status(400).json({ error: 'Please provide a valid YouTube video URL.' });
   }
 
   try {
-    const info = await ytdl.getBasicInfo(url);
+    const info = await ytdl.getBasicInfo(url, {
+      requestOptions: {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+        }
+      }
+    });
     const title = info.videoDetails.title || 'YouTube clip';
     const thumbnail = info.videoDetails.thumbnails?.slice(-1)[0]?.url || info.videoDetails.thumbnails?.[0]?.url || '';
     return res.json({ title, thumbnail });
   } catch (error) {
+    console.error('[metadata] error fetching info', error);
     return res.status(500).json({ error: 'Unable to fetch video metadata. Ensure the link is public and valid.' });
   }
 });
