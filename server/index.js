@@ -95,6 +95,36 @@ const YTDL_HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9'
 };
 
+const fetchYouTubeOEmbed = async (videoId, timeoutMs = 8000) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const url = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&format=json`;
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': YTDL_HEADERS['User-Agent'],
+        Accept: 'application/json'
+      },
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      throw new Error(`oEmbed fetch failed with status ${response.status}`);
+    }
+
+    const data = await response.json();
+    return {
+      title: data.title,
+      thumbnail: data.thumbnail_url,
+      authorName: data.author_name,
+      authorUrl: data.author_url
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
 app.post('/api/metadata', async (req, res) => {
   const { url } = req.body;
   console.log('[metadata] request received', { url });
@@ -106,6 +136,7 @@ app.post('/api/metadata', async (req, res) => {
 
   try {
     const normalizedUrl = normalizeYouTubeUrl(url);
+    const videoId = extractYouTubeId(url);
     console.log('[metadata] normalized URL', normalizedUrl);
 
     const info = await ytdl.getBasicInfo(normalizedUrl, {
@@ -115,10 +146,37 @@ app.post('/api/metadata', async (req, res) => {
     });
     const title = info.videoDetails.title || 'YouTube clip';
     const thumbnail = info.videoDetails.thumbnails?.slice(-1)[0]?.url || info.videoDetails.thumbnails?.[0]?.url || '';
-    return res.json({ title, thumbnail });
+    return res.json({ source: 'ytdl', title, thumbnail });
   } catch (error) {
-    console.error('[metadata] error fetching info', error);
-    return res.status(500).json({ error: 'Unable to fetch video metadata. Ensure the link is public and valid.' });
+    console.error('[metadata] ytdl error', error);
+
+    const message = error?.message || String(error);
+    const statusCode = error?.statusCode || error?.status || null;
+    const normalizedUrl = normalizeYouTubeUrl(url);
+    const videoId = extractYouTubeId(url);
+
+    if (videoId) {
+      try {
+        console.log('[metadata] attempting oEmbed fallback', { videoId });
+        const fallback = await fetchYouTubeOEmbed(videoId);
+        return res.json({ source: 'oembed', title: fallback.title, thumbnail: fallback.thumbnail, authorName: fallback.authorName, authorUrl: fallback.authorUrl });
+      } catch (fallbackError) {
+        console.error('[metadata] oEmbed fallback failed', fallbackError);
+      }
+    }
+
+    const response = {
+      error: 'Unable to fetch video metadata. Ensure the link is public and valid.',
+      details: message
+    };
+    if (statusCode) response.status = statusCode;
+    if (message.includes('410')) {
+      response.details = 'YouTube returned a 410 response; the video may be restricted, blocked, or the scraper is outdated.';
+    } else if (message.includes('429')) {
+      response.details = 'YouTube rate limited the request; try again later or use a different IP/proxy.';
+    }
+
+    return res.status(500).json(response);
   }
 });
 
