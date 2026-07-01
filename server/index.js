@@ -5,7 +5,7 @@ const express = require('express');
 const cors = require('cors');
 
 process.env.YTDL_NO_UPDATE = '1';
-const ytdl = require('ytdl-core');
+const ytdl = require('@distube/ytdl-core');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
 
