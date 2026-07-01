@@ -29,9 +29,15 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', port: Number(process.env.PORT) || port });
 });
 
+const cleanYouTubeUrl = (url) => {
+  if (typeof url !== 'string') return '';
+  return url.trim().replace(/\s+/g, '');
+};
+
 const extractYouTubeId = (url) => {
   try {
-    const parsed = new URL(url);
+    const cleaned = cleanYouTubeUrl(url);
+    const parsed = new URL(cleaned);
     const host = parsed.hostname.toLowerCase();
 
     if (host.includes('youtu.be')) {
@@ -42,20 +48,31 @@ const extractYouTubeId = (url) => {
       return parsed.searchParams.get('v');
     }
 
+    const pathParts = parsed.pathname.split('/').filter(Boolean);
+    if (pathParts[0] === 'shorts' || pathParts[0] === 'embed') {
+      return pathParts[1] || null;
+    }
+
     return null;
   } catch {
-    return null;
+    const fallback = url.match(/(?:v=|\/)([A-Za-z0-9_-]{11})/);
+    return fallback ? fallback[1] : null;
   }
 };
 
 const normalizeYouTubeUrl = (url) => {
   const videoId = extractYouTubeId(url);
-  return videoId ? `https://www.youtube.com/watch?v=${videoId}` : url;
+  if (!videoId) return cleanYouTubeUrl(url);
+
+  const normalized = new URL('https://www.youtube.com/watch');
+  normalized.searchParams.set('v', videoId);
+  return normalized.toString();
 };
 
 const isValidYouTubeUrl = (url) => {
   try {
-    const parsed = new URL(url);
+    const cleaned = cleanYouTubeUrl(url);
+    const parsed = new URL(cleaned);
     const host = parsed.hostname.toLowerCase();
     return [
       'youtube.com',
@@ -67,7 +84,7 @@ const isValidYouTubeUrl = (url) => {
       'youtube-nocookie.com'
     ].some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
   } catch {
-    return false;
+    return Boolean(extractYouTubeId(url));
   }
 };
 
@@ -89,7 +106,7 @@ app.post('/api/metadata', async (req, res) => {
 
   try {
     const normalizedUrl = normalizeYouTubeUrl(url);
-    console.log('[metadata] normalized URL', { normalizedUrl });
+    console.log('[metadata] normalized URL', normalizedUrl);
 
     const info = await ytdl.getBasicInfo(normalizedUrl, {
       requestOptions: {
