@@ -3,8 +3,11 @@ services:
     name: trimmer-yt
     env: node
     plan: free
-    buildCommand: npm install
-    startCommand: npm start
+    buildCommand: |
+      npm install --prefix server
+      npm install --prefix client
+      npm --prefix client run build
+    startCommand: npm --prefix server start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
