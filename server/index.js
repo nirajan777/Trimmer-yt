@@ -5,7 +5,7 @@ const express = require('express');
 const cors = require('cors');
 
 process.env.YTDL_NO_UPDATE = '1';
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const ytdl = require('@distube/ytdl-core');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
@@ -27,7 +27,70 @@ app.use((req, res, next) => {
 });
 
 app.get('/api/health', (req, res) => {
+  console.log('✅ /api/health hit');
   res.json({ status: 'ok', port: Number(process.env.PORT) || port });
+});
+
+app.get('/test', (req, res) => {
+  console.log('✅ /test route hit');
+  res.send('Server working');
+});
+
+app.post('/clip', (req, res) => {
+  console.log('🔥 /clip endpoint hit');
+  console.log('BODY:', req.body);
+
+  const { url, start, end } = req.body;
+
+  if (!url || !start || !end) {
+    console.log('❌ Missing data', { url, start, end });
+    return res.status(400).send('Missing fields');
+  }
+
+  const id = Date.now();
+  const video = path.join(os.tmpdir(), `video-${id}.mp4`);
+  const clip = path.join(os.tmpdir(), `clip-${id}.mp4`);
+
+  const downloadCmd = `yt-dlp -f "best[ext=mp4]" -o "${video}" "${url}"`;
+  const clipCmd = `ffmpeg -ss ${start} -to ${end} -i "${video}" -c:v libx264 -c:a aac "${clip}"`;
+
+  console.log('📥 Download CMD:', downloadCmd);
+
+  exec(downloadCmd, { maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
+    console.log('DOWNLOAD STDOUT:', stdout);
+    console.log('DOWNLOAD STDERR:', stderr);
+
+    if (err) {
+      console.log('❌ Download error:', err);
+      return res.status(500).send('Download failed');
+    }
+
+    console.log('✂️ Clip CMD:', clipCmd);
+
+    exec(clipCmd, { maxBuffer: 1024 * 1024 * 20 }, (err2, stdout2, stderr2) => {
+      console.log('CLIP STDOUT:', stdout2);
+      console.log('CLIP STDERR:', stderr2);
+
+      if (err2) {
+        console.log('❌ Clip error:', err2);
+        return res.status(500).send('Clip failed');
+      }
+
+      res.download(clip, (downloadErr) => {
+        if (downloadErr) {
+          console.log('❌ Download send error:', downloadErr);
+        }
+
+        try {
+          fs.unlinkSync(video);
+          fs.unlinkSync(clip);
+          console.log('🧹 Cleaned up temporary files');
+        } catch (cleanupError) {
+          console.log('Cleanup error:', cleanupError);
+        }
+      });
+    });
+  });
 });
 
 const cleanYouTubeUrl = (url) => {
@@ -209,9 +272,13 @@ app.post('/api/metadata', async (req, res) => {
 });
 
 app.post('/api/process', async (req, res) => {
+  console.log('🔥 /api/process endpoint hit');
+  console.log('BODY:', req.body);
+
   const { url, start, end } = req.body;
 
   if (!url || typeof url !== 'string' || !isValidYouTubeUrl(url)) {
+    console.log('❌ Invalid URL in /api/process', url);
     return res.status(400).json({ error: 'Please provide a valid YouTube video URL.' });
   }
 
