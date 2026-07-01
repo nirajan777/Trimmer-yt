@@ -71,6 +71,13 @@ const isValidYouTubeUrl = (url) => {
   }
 };
 
+const YTDL_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9'
+};
+
 app.post('/api/metadata', async (req, res) => {
   const { url } = req.body;
   console.log('[metadata] request received', { url });
@@ -86,12 +93,7 @@ app.post('/api/metadata', async (req, res) => {
 
     const info = await ytdl.getBasicInfo(normalizedUrl, {
       requestOptions: {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9'
-        }
+        headers: YTDL_HEADERS
       }
     });
     const title = info.videoDetails.title || 'YouTube clip';
@@ -118,7 +120,15 @@ app.post('/api/process', async (req, res) => {
   const outputPath = path.join(tempDir, 'clip.mp4');
 
   try {
-    const stream = ytdl(url, { quality: 'highestvideo' });
+    const normalizedUrl = normalizeYouTubeUrl(url);
+    console.log('[process] normalized URL', { normalizedUrl });
+
+    const stream = ytdl(normalizedUrl, {
+      quality: 'highestvideo',
+      requestOptions: {
+        headers: YTDL_HEADERS
+      }
+    });
     const ffmpegStream = ffmpeg(stream)
       .format('mp4')
       .outputOptions(['-movflags frag_keyframe+empty_moov'])
