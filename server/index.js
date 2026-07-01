@@ -5,6 +5,7 @@ const express = require('express');
 const cors = require('cors');
 
 process.env.YTDL_NO_UPDATE = '1';
+const { spawn } = require('child_process');
 const ytdl = require('@distube/ytdl-core');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
@@ -94,6 +95,33 @@ const YTDL_HEADERS = {
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9'
 };
+
+const parseYouTubeTimestamp = (value) => {
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'string') return null;
+
+  const trimmed = value.trim();
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return Number(trimmed);
+  }
+
+  const parts = trimmed.split(':').map((segment) => Number(segment));
+  if (parts.some((segment) => Number.isNaN(segment) || segment < 0)) {
+    return null;
+  }
+
+  if (parts.length === 3) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+
+  if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
+  }
+
+  return null;
+};
+
+const CLIP_DURATION_LIMIT_SECONDS = 30;
 
 const fetchYouTubeOEmbed = async (videoId, timeoutMs = 8000) => {
   const controller = new AbortController();
@@ -187,37 +215,69 @@ app.post('/api/process', async (req, res) => {
     return res.status(400).json({ error: 'Please provide a valid YouTube video URL.' });
   }
 
-  if (typeof start !== 'number' || typeof end !== 'number' || start < 0 || end <= start) {
-    return res.status(400).json({ error: 'Please provide valid start and end times in seconds.' });
+  const startSeconds = parseYouTubeTimestamp(start);
+  const endSeconds = parseYouTubeTimestamp(end);
+
+  if (startSeconds === null || endSeconds === null || startSeconds < 0 || endSeconds <= startSeconds) {
+    return res.status(400).json({ error: 'Please provide valid start and end times.' });
+  }
+
+  const duration = endSeconds - startSeconds;
+  if (duration > CLIP_DURATION_LIMIT_SECONDS) {
+    return res.status(400).json({ error: `Clip duration must not exceed ${CLIP_DURATION_LIMIT_SECONDS} seconds.` });
   }
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clip-'));
-  const outputPath = path.join(tempDir, 'clip.mp4');
+  const outputPath = path.join(tempDir, `clip-${Date.now()}.mp4`);
+  const normalizedUrl = normalizeYouTubeUrl(url);
+  console.log('[process] normalized URL', normalizedUrl);
 
   try {
-    const normalizedUrl = normalizeYouTubeUrl(url);
-    console.log('[process] normalized URL', { normalizedUrl });
-
-    const stream = ytdl(normalizedUrl, {
-      quality: 'highestvideo',
-      requestOptions: {
-        headers: YTDL_HEADERS
-      }
+    const ytdlp = spawn('yt-dlp', ['-f', 'mp4', '-o', '-', normalizedUrl], {
+      stdio: ['ignore', 'pipe', 'inherit']
     });
-    const ffmpegStream = ffmpeg(stream)
-      .format('mp4')
-      .outputOptions(['-movflags frag_keyframe+empty_moov'])
-      .setStartTime(start)
-      .setDuration(end - start)
-      .videoCodec('libx264')
-      .audioCodec('aac')
-      .output(outputPath)
-      .on('error', (err) => {
-        console.error('FFmpeg error', err.message);
-      });
+
+    const ffmpegProcess = spawn(
+      'ffmpeg',
+      [
+        '-ss',
+        `${startSeconds}`,
+        '-to',
+        `${endSeconds}`,
+        '-i',
+        'pipe:0',
+        '-c',
+        'copy',
+        '-movflags',
+        'frag_keyframe+empty_moov',
+        outputPath
+      ],
+      { stdio: ['pipe', 'inherit', 'inherit'] }
+    );
+
+    ytdlp.stdout.pipe(ffmpegProcess.stdin);
 
     await new Promise((resolve, reject) => {
-      ffmpegStream.on('end', resolve).on('error', reject).run();
+      let ytdlpError = null;
+
+      ytdlp.on('error', reject);
+      ffmpegProcess.on('error', reject);
+
+      ytdlp.on('close', (code) => {
+        if (code !== 0) {
+          ytdlpError = new Error(`yt-dlp exited with code ${code}`);
+        }
+      });
+
+      ffmpegProcess.on('close', (code) => {
+        if (code !== 0) {
+          return reject(new Error(`ffmpeg exited with code ${code}`));
+        }
+        if (ytdlpError) {
+          return reject(ytdlpError);
+        }
+        resolve();
+      });
     });
 
     const stat = fs.statSync(outputPath);
@@ -238,7 +298,13 @@ app.post('/api/process', async (req, res) => {
     });
   } catch (error) {
     console.error('Processing error', error);
-    res.status(500).json({ error: 'Clip processing failed. Please try again with a shorter range.' });
+    try {
+      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+      if (fs.existsSync(tempDir)) fs.rmdirSync(tempDir);
+    } catch (cleanupError) {
+      console.error('Cleanup error', cleanupError);
+    }
+    res.status(500).json({ error: 'Clip processing failed. Please try a shorter segment or validate the URL.' });
   }
 });
 
